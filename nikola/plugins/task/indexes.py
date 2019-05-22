@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright © 2012-2013 Roberto Alsina and others.
+# Copyright © 2012-2019 Roberto Alsina and others.
 
 # Permission is hereby granted, free of charge, to any
 # person obtaining a copy of this software and associated
@@ -24,144 +24,114 @@
 # OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-from __future__ import unicode_literals
-import glob
-import itertools
-import os
-
-from nikola.plugin_categories import Task
-from nikola.utils import config_changed
+"""Render the blog's main index."""
 
 
-class Indexes(Task):
-    """Render the blog indexes."""
+from nikola.plugin_categories import Taxonomy
 
-    name = "render_indexes"
+
+class Indexes(Taxonomy):
+    """Classify for the blog's main index."""
+
+    name = "classify_indexes"
+
+    classification_name = "index"
+    overview_page_variable_name = None
+    more_than_one_classifications_per_post = False
+    has_hierarchy = False
+    show_list_as_index = True
+    template_for_single_list = "index.tmpl"
+    template_for_classification_overview = None
+    apply_to_posts = True
+    apply_to_pages = False
+    omit_empty_classifications = False
+    path_handler_docstrings = {
+        'index_index': False,
+        'index': """Link to a numbered index.
+
+Example:
+
+link://index/3 => /index-3.html""",
+        'index_atom': """Link to a numbered Atom index.
+
+Example:
+
+link://index_atom/3 => /index-3.atom""",
+        'index_rss': """A link to the RSS feed path.
+
+Example:
+
+link://rss => /blog/rss.xml""",
+    }
 
     def set_site(self, site):
-        site.register_path_handler('index', self.index_path)
+        """Set Nikola site."""
+        # Redirect automatically generated 'index_rss' path handler to 'rss' for compatibility with old rss plugin
+        site.register_path_handler('rss', lambda name, lang: site.path_handlers['index_rss'](name, lang))
+        site.path_handlers['rss'].__doc__ = """A link to the RSS feed path.
+
+Example:
+
+    link://rss => /blog/rss.xml
+        """.strip()
         return super(Indexes, self).set_site(site)
 
-    def gen_tasks(self):
-        self.site.scan_posts()
-        yield self.group_task()
+    def get_implicit_classifications(self, lang):
+        """Return a list of classification strings which should always appear in posts_per_classification."""
+        return [""]
 
+    def classify(self, post, lang):
+        """Classify the given post for the given language."""
+        return [""]
+
+    def get_classification_friendly_name(self, classification, lang, only_last_component=False):
+        """Extract a friendly name from the classification."""
+        return self.site.config["BLOG_TITLE"](lang)
+
+    def get_path(self, classification, lang, dest_type='page'):
+        """Return a path for the given classification."""
+        if dest_type == 'rss':
+            return [
+                self.site.config['RSS_PATH'](lang),
+                self.site.config['RSS_FILENAME_BASE'](lang)
+            ], 'auto'
+        if dest_type == 'feed':
+            return [
+                self.site.config['ATOM_PATH'](lang),
+                self.site.config['ATOM_FILENAME_BASE'](lang)
+            ], 'auto'
+        page_number = None
+        if dest_type == 'page':
+            # Interpret argument as page number
+            try:
+                page_number = int(classification)
+            except (ValueError, TypeError):
+                pass
+        return [self.site.config['INDEX_PATH'](lang)], 'always', page_number
+
+    def provide_context_and_uptodate(self, classification, lang, node=None):
+        """Provide data for the context and the uptodate list for the list of the given classifiation."""
         kw = {
-            "translations": self.site.config['TRANSLATIONS'],
-            "index_display_post_count":
-            self.site.config['INDEX_DISPLAY_POST_COUNT'],
-            "messages": self.site.MESSAGES,
-            "index_teasers": self.site.config['INDEX_TEASERS'],
-            "output_folder": self.site.config['OUTPUT_FOLDER'],
-            "filters": self.site.config['FILTERS'],
-            "hide_untranslated_posts": self.site.config['HIDE_UNTRANSLATED_POSTS'],
-            "indexes_title": self.site.config['INDEXES_TITLE'],
-            "indexes_pages": self.site.config['INDEXES_PAGES'],
-            "blog_title": self.site.config["BLOG_TITLE"],
+            "show_untranslated_posts": self.site.config["SHOW_UNTRANSLATED_POSTS"],
         }
-
-        template_name = "index.tmpl"
-        posts = [x for x in self.site.timeline if x.use_in_feeds]
-        for lang in kw["translations"]:
-            # Split in smaller lists
-            lists = []
-            if kw["hide_untranslated_posts"]:
-                filtered_posts = [x for x in posts if x.is_translation_available(lang)]
-            else:
-                filtered_posts = posts
-            lists.append(filtered_posts[:kw["index_display_post_count"]])
-            filtered_posts = filtered_posts[kw["index_display_post_count"]:]
-            while filtered_posts:
-                lists.append(filtered_posts[-kw["index_display_post_count"]:])
-                filtered_posts = filtered_posts[:-kw["index_display_post_count"]]
-            num_pages = len(lists)
-            for i, post_list in enumerate(lists):
-                context = {}
-                indexes_title = kw['indexes_title'] or kw['blog_title']
-                if kw["indexes_pages"]:
-                    indexes_pages = kw["indexes_pages"] % i
-                else:
-                    indexes_pages = " (" + \
-                        kw["messages"][lang]["old posts page %d"] % i + ")"
-                if i > 0:
-                    context["title"] = indexes_title + indexes_pages
-                else:
-                    context["title"] = indexes_title
-                context["prevlink"] = None
-                context["nextlink"] = None
-                context['index_teasers'] = kw['index_teasers']
-                if i == 0:  # index.html page
-                    context["prevlink"] = None
-                    if num_pages > 1:
-                        context["nextlink"] = "index-{0}.html".format(num_pages - 1)
-                    else:
-                        context["nextlink"] = None
-                else:  # index-x.html pages
-                    if i > 1:
-                        context["nextlink"] = "index-{0}.html".format(i - 1)
-                    if i < num_pages - 1:
-                        context["prevlink"] = "index-{0}.html".format(i + 1)
-                    elif i == num_pages - 1:
-                        context["prevlink"] = "index.html"
-                context["permalink"] = self.site.link("index", i, lang)
-                output_name = os.path.join(
-                    kw['output_folder'], self.site.path("index", i,
-                                                        lang))
-                task = self.site.generic_post_list_renderer(
-                    lang,
-                    post_list,
-                    output_name,
-                    template_name,
-                    kw['filters'],
-                    context,
-                )
-                task_cfg = {1: task['uptodate'][0].config, 2: kw}
-                task['uptodate'] = [config_changed(task_cfg)]
-                task['basename'] = 'render_indexes'
-                yield task
-
-        if not self.site.config["STORY_INDEX"]:
-            return
-        kw = {
-            "translations": self.site.config['TRANSLATIONS'],
-            "post_pages": self.site.config["post_pages"],
-            "output_folder": self.site.config['OUTPUT_FOLDER'],
-            "filters": self.site.config['FILTERS'],
+        context = {
+            "title": self.site.config["INDEXES_TITLE"](lang) or self.site.config["BLOG_TITLE"](lang),
+            "description": self.site.config["BLOG_DESCRIPTION"](lang),
+            "pagekind": ["main_index", "index"],
+            "featured": [p for p in self.site.posts if p.post_status == 'featured' and
+                         (lang in p.translated_to or kw["show_untranslated_posts"])],
         }
-        template_name = "list.tmpl"
-        for lang in kw["translations"]:
-            # Need to group by folder to avoid duplicated tasks (Issue #758)
-            for dirname, wildcards in itertools.groupby((w for w, d, x, i in kw["post_pages"] if not i), os.path.dirname):
-                context = {}
-                # vim/pyflakes thinks it's unused
-                # src_dir = os.path.dirname(wildcard)
-                files = []
-                for wildcard in wildcards:
-                    files += glob.glob(wildcard)
-                post_list = [self.site.global_data[p] for p in files]
-                output_name = os.path.join(kw["output_folder"],
-                                           self.site.path("post_path",
-                                                          wildcard,
-                                                          lang)).encode('utf8')
-                context["items"] = [(post.title(lang), post.permalink(lang))
-                                    for post in post_list]
-                task = self.site.generic_post_list_renderer(lang, post_list,
-                                                            output_name,
-                                                            template_name,
-                                                            kw['filters'],
-                                                            context)
-                task_cfg = {1: task['uptodate'][0].config, 2: kw}
-                task['uptodate'] = [config_changed(task_cfg)]
-                task['basename'] = self.name
-                yield task
+        kw.update(context)
+        return context, kw
 
-    def index_path(self, name, lang):
-        if name not in [None, 0]:
-            return [_f for _f in [self.site.config['TRANSLATIONS'][lang],
-                                  self.site.config['INDEX_PATH'],
-                                  'index-{0}.html'.format(name)] if _f]
-        else:
-            return [_f for _f in [self.site.config['TRANSLATIONS'][lang],
-                                  self.site.config['INDEX_PATH'],
-                                  self.site.config['INDEX_FILE']]
-                    if _f]
+    def should_generate_classification_page(self, classification, post_list, lang):
+        """Only generates list of posts for classification if this function returns True."""
+        return not self.site.config["DISABLE_INDEXES"]
+
+    def should_generate_atom_for_classification_page(self, classification, post_list, lang):
+        """Only generates Atom feed for list of posts for classification if this function returns True."""
+        return not self.site.config["DISABLE_MAIN_ATOM_FEED"]
+
+    def should_generate_rss_for_classification_page(self, classification, post_list, lang):
+        """Only generates RSS feed for list of posts for classification if this function returns True."""
+        return not self.site.config["DISABLE_MAIN_RSS_FEED"]

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright © 2012-2013 Roberto Alsina and others.
+# Copyright © 2012-2019 Roberto Alsina and others.
 
 # Permission is hereby granted, free of charge, to any
 # person obtaining a copy of this software and associated
@@ -24,35 +24,37 @@
 # OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+"""Vimeo directive for reStructuredText."""
 
 from docutils import nodes
 from docutils.parsers.rst import Directive, directives
+from nikola.plugins.compile.rest import _align_choice, _align_options_base
 
-try:
-    import requests
-except ImportError:
-    requests = None  # NOQA
+import requests
 import json
 
 
 from nikola.plugin_categories import RestExtension
-from nikola.utils import req_missing
 
 
 class Plugin(RestExtension):
+    """Plugin for vimeo reST directive."""
 
     name = "rest_vimeo"
 
     def set_site(self, site):
+        """Set Nikola site."""
         self.site = site
         directives.register_directive('vimeo', Vimeo)
         return super(Plugin, self).set_site(site)
 
 
-CODE = """<iframe src="http://player.vimeo.com/video/{vimeo_id}"
+CODE = """<div class="vimeo-video{align}">
+<iframe src="https://player.vimeo.com/video/{vimeo_id}"
 width="{width}" height="{height}"
-frameborder="0" webkitAllowFullScreen mozallowfullscreen allowFullScreen>
+frameborder="0" webkitAllowFullScreen="webkitAllowFullScreen" mozallowfullscreen="mozallowfullscreen" allowFullScreen="allowFullScreen">
 </iframe>
+</div>
 """
 
 VIDEO_DEFAULT_HEIGHT = 500
@@ -60,25 +62,28 @@ VIDEO_DEFAULT_WIDTH = 281
 
 
 class Vimeo(Directive):
-    """ Restructured text extension for inserting vimeo embedded videos
+    """reST extension for inserting vimeo embedded videos.
 
-        Usage:
-            .. vimeo:: 20241459
-               :height: 400
-               :width: 600
+    Usage:
+        .. vimeo:: 20241459
+           :height: 400
+           :width: 600
 
     """
+
     has_content = True
     required_arguments = 1
     option_spec = {
         "width": directives.positive_int,
         "height": directives.positive_int,
+        "align": _align_choice
     }
 
     # set to False for not querying the vimeo api for size
     request_size = True
 
     def run(self):
+        """Run the vimeo directive."""
         self.check_content()
         options = {
             'vimeo_id': self.arguments[0],
@@ -91,16 +96,18 @@ class Vimeo(Directive):
                 return err
             self.set_video_size()
         options.update(self.options)
+        if self.options.get('align') in _align_options_base:
+            options['align'] = ' align-' + self.options['align']
+        else:
+            options['align'] = ''
         return [nodes.raw('', CODE.format(**options), format='html')]
 
     def check_modules(self):
-        msg = None
-        if requests is None:
-            msg = req_missing(['requests'], 'use the vimeo directive', optional=True)
-            return [nodes.raw('', '<div class="text-error">{0}</div>'.format(msg), format='html')]
+        """Check modules."""
         return None
 
     def set_video_size(self):
+        """Set video size."""
         # Only need to make a connection if width and height aren't provided
         if 'height' not in self.options or 'width' not in self.options:
             self.options['height'] = VIDEO_DEFAULT_HEIGHT
@@ -108,7 +115,7 @@ class Vimeo(Directive):
 
             if json:  # we can attempt to retrieve video attributes from vimeo
                 try:
-                    url = ('http://vimeo.com/api/v2/video/{0}'
+                    url = ('https://vimeo.com/api/v2/video/{0}'
                            '.json'.format(self.arguments[0]))
                     data = requests.get(url).text
                     video_attributes = json.loads(data)[0]
@@ -119,6 +126,7 @@ class Vimeo(Directive):
                     pass
 
     def check_content(self):
+        """Check if content exists."""
         if self.content:
             raise self.warning("This directive does not accept content. The "
                                "'key=value' format for options is deprecated, "

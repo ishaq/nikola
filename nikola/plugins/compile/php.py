@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright © 2012-2013 Roberto Alsina and others.
+# Copyright © 2012-2019 Roberto Alsina and others.
 
 # Permission is hereby granted, free of charge, to any
 # person obtaining a copy of this software and associated
@@ -24,47 +24,64 @@
 # OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-"""Implementation of compile_html for HTML+php."""
+"""Page compiler plugin for PHP."""
 
-from __future__ import unicode_literals
 
 import os
-import shutil
-import codecs
+import io
 
 from nikola.plugin_categories import PageCompiler
-from nikola.utils import makedirs
-
-try:
-    from collections import OrderedDict
-except ImportError:
-    OrderedDict = None  # NOQA
+from nikola.utils import makedirs, write_metadata
+from hashlib import md5
 
 
 class CompilePhp(PageCompiler):
     """Compile PHP into PHP."""
 
     name = "php"
+    friendly_name = "PHP"
 
-    def compile_html(self, source, dest, is_two_file=True):
+    def compile(self, source, dest, is_two_file=True, post=None, lang=None):
+        """Compile the source file into HTML and save as dest."""
         makedirs(os.path.dirname(dest))
-        shutil.copyfile(source, dest)
+        with io.open(dest, "w+", encoding="utf8") as out_file:
+            with open(source, "rb") as in_file:
+                hash = md5(in_file.read()).hexdigest()
+                out_file.write('<!-- __NIKOLA_PHP_TEMPLATE_INJECTION source:{0} checksum:{1}__ -->'.format(source, hash))
+        return True
 
-    def create_post(self, path, onefile=False, **kw):
-        if OrderedDict is not None:
-            metadata = OrderedDict()
-        else:
-            metadata = {}
+    def compile_string(self, data, source_path=None, is_two_file=True, post=None, lang=None):
+        """Compile PHP into HTML strings."""
+        return data, []
+
+    def create_post(self, path, **kw):
+        """Create a new post."""
+        content = kw.pop('content', None)
+        onefile = kw.pop('onefile', False)
+        # is_page is not used by create_post as of now.
+        kw.pop('is_page', False)
+        metadata = {}
         metadata.update(self.default_metadata)
         metadata.update(kw)
-        os.makedirs(os.path.dirname(path))
-        with codecs.open(path, "wb+", "utf8") as fd:
+        if not metadata['description']:
+            # For PHP, a description must be set.  Otherwise, Nikola will
+            # take the first 200 characters of the post as the Open Graph
+            # description (og:description meta element)!
+            # If the PHP source leaks there:
+            # (a) The script will be executed multiple times
+            # (b) PHP may encounter a syntax error if it cuts too early,
+            #     therefore completely breaking the page
+            # Here, we just use the title.  The user should come up with
+            # something better, but just using the title does the job.
+            metadata['description'] = metadata['title']
+        makedirs(os.path.dirname(path))
+        if not content.endswith('\n'):
+            content += '\n'
+        with io.open(path, "w+", encoding="utf8") as fd:
             if onefile:
-                fd.write('<!-- \n')
-                for k, v in metadata.items():
-                    fd.write('.. {0}: {1}\n'.format(k, v))
-                fd.write('-->\n\n')
-            fd.write("\n<p>Write your post here.</p>")
+                fd.write(write_metadata(metadata, comment_wrap=True, site=self.site, compiler=self))
+            fd.write(content)
 
     def extension(self):
+        """Return extension used for PHP files."""
         return ".php"

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright © 2012-2013 Roberto Alsina and others.
+# Copyright © 2012-2019 Roberto Alsina and others.
 
 # Permission is hereby granted, free of charge, to any
 # person obtaining a copy of this software and associated
@@ -24,6 +24,7 @@
 # OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+"""Media directive for reStructuredText."""
 
 from docutils import nodes
 from docutils.parsers.rst import Directive, directives
@@ -39,25 +40,34 @@ from nikola.utils import req_missing
 
 
 class Plugin(RestExtension):
+    """Plugin for reST media directive."""
 
     name = "rest_media"
 
     def set_site(self, site):
+        """Set Nikola site."""
         self.site = site
         directives.register_directive('media', Media)
+        self.site.register_shortcode('media', _gen_media_embed)
         return super(Plugin, self).set_site(site)
 
 
 class Media(Directive):
-    """ Restructured text extension for inserting any sort of media using micawber."""
+    """reST extension for inserting any sort of media using micawber."""
+
     has_content = False
     required_arguments = 1
     optional_arguments = 999
 
     def run(self):
-        if micawber is None:
-            msg = req_missing(['micawber'], 'use the media directive', optional=True)
-            return [nodes.raw('', '<div class="text-error">{0}</div>'.format(msg), format='html')]
+        """Run media directive."""
+        html = _gen_media_embed(" ".join(self.arguments))
+        return [nodes.raw('', html, format='html')]
 
-        providers = micawber.bootstrap_basic()
-        return [nodes.raw('', micawber.parse_text(" ".join(self.arguments), providers), format='html')]
+
+def _gen_media_embed(url, *q, **kw):
+    if micawber is None:
+        msg = req_missing(['micawber'], 'use the media directive', optional=True)
+        return '<div class="text-error">{0}</div>'.format(msg)
+    providers = micawber.bootstrap_basic()
+    return micawber.parse_text(url, providers)

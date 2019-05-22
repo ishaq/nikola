@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright © 2012-2013 Roberto Alsina and others.
+# Copyright © 2012-2019 Roberto Alsina and others.
 
 # Permission is hereby granted, free of charge, to any
 # person obtaining a copy of this software and associated
@@ -24,75 +24,152 @@
 # OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-"""Implementation of compile_html based on markdown."""
+"""Page compiler plugin for Markdown."""
 
-from __future__ import unicode_literals
 
-import codecs
+import io
 import os
-import re
+import threading
+import json
 
 try:
-    from markdown import markdown
-
-    from nikola.plugins.compile.markdown.mdx_nikola import NikolaExtension
-    nikola_extension = NikolaExtension()
-
-    from nikola.plugins.compile.markdown.mdx_gist import GistExtension
-    gist_extension = GistExtension()
-
-    from nikola.plugins.compile.markdown.mdx_podcast import PodcastExtension
-    podcast_extension = PodcastExtension()
-
+    from markdown import Markdown
 except ImportError:
-    markdown = None  # NOQA
+    Markdown = None  # NOQA
     nikola_extension = None
     gist_extension = None
     podcast_extension = None
 
-
-try:
-    from collections import OrderedDict
-except ImportError:
-    OrderedDict = None  # NOQA
-
+from nikola import shortcodes as sc
 from nikola.plugin_categories import PageCompiler
-from nikola.utils import makedirs, req_missing
+from nikola.utils import makedirs, req_missing, write_metadata, LocaleBorg, map_metadata
+
+
+class ThreadLocalMarkdown(threading.local):
+    """Convert Markdown to HTML using per-thread Markdown objects.
+
+    See discussion in #2661.
+    """
+
+    def __init__(self, extensions, extension_configs):
+        """Create a Markdown instance."""
+        self.markdown = Markdown(extensions=extensions, extension_configs=extension_configs, output_format="html5")
+
+    def convert(self, data):
+        """Convert data to HTML and reset internal state."""
+        result = self.markdown.convert(data)
+        try:
+            meta = {}
+            for k in self.markdown.Meta:  # This reads everything as lists
+                meta[k.lower()] = ','.join(self.markdown.Meta[k])
+        except Exception:
+            meta = {}
+        self.markdown.reset()
+        return result, meta
 
 
 class CompileMarkdown(PageCompiler):
-    """Compile markdown into HTML."""
+    """Compile Markdown into HTML."""
 
     name = "markdown"
+    friendly_name = "Markdown"
     demote_headers = True
-    extensions = [gist_extension, nikola_extension, podcast_extension]
     site = None
+    supports_metadata = False
 
-    def compile_html(self, source, dest, is_two_file=True):
-        if markdown is None:
+    def set_site(self, site):
+        """Set Nikola site."""
+        super(CompileMarkdown, self).set_site(site)
+        self.config_dependencies = []
+        extensions = []
+        for plugin_info in self.get_compiler_extensions():
+            self.config_dependencies.append(plugin_info.name)
+            extensions.append(plugin_info.plugin_object)
+            plugin_info.plugin_object.short_help = plugin_info.description
+
+        site_extensions = self.site.config.get("MARKDOWN_EXTENSIONS")
+        self.config_dependencies.append(str(sorted(site_extensions)))
+        extensions.extend(site_extensions)
+
+        site_extension_configs = self.site.config.get("MARKDOWN_EXTENSION_CONFIGS")
+        if site_extension_configs:
+            self.config_dependencies.append(json.dumps(site_extension_configs.values, sort_keys=True))
+
+        if Markdown is not None:
+            self.converters = {}
+            for lang in self.site.config['TRANSLATIONS']:
+                lang_extension_configs = site_extension_configs(lang) if site_extension_configs else {}
+                self.converters[lang] = ThreadLocalMarkdown(extensions, lang_extension_configs)
+        self.supports_metadata = 'markdown.extensions.meta' in extensions
+
+    def compile_string(self, data, source_path=None, is_two_file=True, post=None, lang=None):
+        """Compile Markdown into HTML strings."""
+        if lang is None:
+            lang = LocaleBorg().current_lang
+        if Markdown is None:
+            req_missing(['markdown'], 'build this site (compile Markdown)')
+        if not is_two_file:
+            _, data = self.split_metadata(data, post, lang)
+        new_data, shortcodes = sc.extract_shortcodes(data)
+        output, _ = self.converters[lang].convert(new_data)
+        output, shortcode_deps = self.site.apply_shortcodes_uuid(output, shortcodes, filename=source_path, extra_context={'post': post})
+        return output, shortcode_deps
+
+    def compile(self, source, dest, is_two_file=True, post=None, lang=None):
+        """Compile the source file into HTML and save as dest."""
+        if Markdown is None:
             req_missing(['markdown'], 'build this site (compile Markdown)')
         makedirs(os.path.dirname(dest))
-        self.extensions += self.site.config.get("MARKDOWN_EXTENSIONS")
-        with codecs.open(dest, "w+", "utf8") as out_file:
-            with codecs.open(source, "r", "utf8") as in_file:
+        with io.open(dest, "w+", encoding="utf8") as out_file:
+            with io.open(source, "r", encoding="utf8") as in_file:
                 data = in_file.read()
-            if not is_two_file:
-                data = re.split('(\n\n|\r\n\r\n)', data, maxsplit=1)[-1]
-            output = markdown(data, self.extensions)
+            output, shortcode_deps = self.compile_string(data, source, is_two_file, post, lang)
             out_file.write(output)
-
-    def create_post(self, path, onefile=False, **kw):
-        if OrderedDict is not None:
-            metadata = OrderedDict()
+        if post is None:
+            if shortcode_deps:
+                self.logger.error(
+                    "Cannot save dependencies for post {0} (post unknown)",
+                    source)
         else:
-            metadata = {}
+            post._depfile[dest] += shortcode_deps
+
+    def create_post(self, path, **kw):
+        """Create a new post."""
+        content = kw.pop('content', None)
+        onefile = kw.pop('onefile', False)
+        # is_page is not used by create_post as of now.
+        kw.pop('is_page', False)
+
+        metadata = {}
         metadata.update(self.default_metadata)
         metadata.update(kw)
         makedirs(os.path.dirname(path))
-        with codecs.open(path, "wb+", "utf8") as fd:
+        if not content.endswith('\n'):
+            content += '\n'
+        with io.open(path, "w+", encoding="utf8") as fd:
             if onefile:
-                fd.write('<!-- \n')
-                for k, v in metadata.items():
-                    fd.write('.. {0}: {1}\n'.format(k, v))
-                fd.write('-->\n\n')
-            fd.write("Write your post here.")
+                fd.write(write_metadata(metadata, comment_wrap=True, site=self.site, compiler=self))
+            fd.write(content)
+
+    def read_metadata(self, post, lang=None):
+        """Read the metadata from a post, and return a metadata dict."""
+        lang = lang or self.site.config.get('DEFAULT_LANGUAGE', 'en')
+        if not self.supports_metadata:
+            return {}
+        if Markdown is None:
+            req_missing(['markdown'], 'build this site (compile Markdown)')
+        if lang is None:
+            lang = LocaleBorg().current_lang
+        source = post.translated_source_path(lang)
+        with io.open(source, 'r', encoding='utf-8') as inf:
+            # Note: markdown meta returns lowercase keys
+            data = inf.read()
+            # If the metadata starts with "---" it's actually YAML and
+            # we should not let markdown parse it, because it will do
+            # bad things like setting empty tags to "''"
+            if data.startswith('---\n'):
+                return {}
+            _, meta = self.converters[lang].convert(data)
+        # Map metadata from other platforms to names Nikola expects (Issue #2817)
+        map_metadata(meta, 'markdown_metadata', self.site.config)
+        return meta

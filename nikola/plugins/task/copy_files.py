@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright © 2012-2013 Roberto Alsina and others.
+# Copyright © 2012-2019 Roberto Alsina and others.
 
 # Permission is hereby granted, free of charge, to any
 # person obtaining a copy of this software and associated
@@ -24,6 +24,8 @@
 # OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+"""Copy static files into the output folder."""
+
 import os
 
 from nikola.plugin_categories import Task
@@ -37,7 +39,6 @@ class CopyFiles(Task):
 
     def gen_tasks(self):
         """Copy static files into the output folder."""
-
         kw = {
             'files_folders': self.site.config['FILES_FOLDERS'],
             'output_folder': self.site.config['OUTPUT_FOLDER'],
@@ -51,5 +52,5 @@ class CopyFiles(Task):
             real_dst = os.path.join(dst, kw['files_folders'][src])
             for task in utils.copy_tree(src, real_dst, link_cutoff=dst):
                 task['basename'] = self.name
-                task['uptodate'] = [utils.config_changed(kw)]
-                yield utils.apply_filters(task, filters)
+                task['uptodate'] = [utils.config_changed(kw, 'nikola.plugins.task.copy_files')]
+                yield utils.apply_filters(task, filters, skip_ext=['.html'])

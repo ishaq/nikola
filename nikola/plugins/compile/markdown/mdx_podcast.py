@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright (c) 2013 Michael Rabbitt, Roberto Alsina
+# Copyright © 2013-2019 Michael Rabbitt, Roberto Alsina and others.
 #
 # Permission is hereby granted, free of charge, to any person obtaining a
 # copy of this software and associated documentation files (the
@@ -24,35 +24,40 @@
 # Inspired by "[Python] reStructuredText GitHub Podcast directive"
 # (https://gist.github.com/brianhsu/1407759), public domain by Brian Hsu
 
-from __future__ import print_function, unicode_literals
-
-
-'''
-Extension to Python Markdown for Embedded Audio
+"""
+Extension to Python Markdown for Embedded Audio.
 
 Basic Example:
 
 >>> import markdown
->>> text = """[podcast]http://archive.org/download/Rebeldes_Stereotipos/rs20120609_1.mp3[/podcast]"""
+>>> text = "[podcast]https://archive.org/download/Rebeldes_Stereotipos/rs20120609_1.mp3[/podcast]"
 >>> html = markdown.markdown(text, [PodcastExtension()])
 >>> print(html)
-<p><audio src="http://archive.org/download/Rebeldes_Stereotipos/rs20120609_1.mp3"></audio></p>
-'''
+<p><audio controls=""><source src="https://archive.org/download/Rebeldes_Stereotipos/rs20120609_1.mp3" type="audio/mpeg"></source></audio></p>
+"""
 
-from markdown.extensions import Extension
-from markdown.inlinepatterns import Pattern
-from markdown.util import etree
+from nikola.plugin_categories import MarkdownExtension
+try:
+    from markdown.extensions import Extension
+    from markdown.inlinepatterns import Pattern
+    from markdown.util import etree
+except ImportError:
+    # No need to catch this, if you try to use this without Markdown,
+    # the markdown compiler will fail first
+    Pattern = Extension = object
 
 PODCAST_RE = r'\[podcast\](?P<url>.+)\[/podcast\]'
 
 
 class PodcastPattern(Pattern):
-    """ InlinePattern for footnote markers in a document's body text. """
+    """InlinePattern for footnote markers in a document's body text."""
 
     def __init__(self, pattern, configs):
+        """Initialize pattern."""
         Pattern.__init__(self, pattern)
 
     def handleMatch(self, m):
+        """Handle pattern matches."""
         url = m.group('url').strip()
         audio_elem = etree.Element('audio')
         audio_elem.set('controls', '')
@@ -62,8 +67,11 @@ class PodcastPattern(Pattern):
         return audio_elem
 
 
-class PodcastExtension(Extension):
+class PodcastExtension(MarkdownExtension, Extension):
+    """Podcast extension for Markdown."""
+
     def __init__(self, configs={}):
+        """Initialize extension."""
         # set extension defaults
         self.config = {}
 
@@ -72,14 +80,17 @@ class PodcastExtension(Extension):
             self.setConfig(key, value)
 
     def extendMarkdown(self, md, md_globals):
+        """Extend Markdown."""
         podcast_md_pattern = PodcastPattern(PODCAST_RE, self.getConfigs())
         podcast_md_pattern.md = md
         md.inlinePatterns.add('podcast', podcast_md_pattern, "<not_strong")
         md.registerExtension(self)
 
 
-def makeExtension(configs=None):
+def makeExtension(configs=None):  # pragma: no cover
+    """Make Markdown extension."""
     return PodcastExtension(configs)
+
 
 if __name__ == '__main__':
     import doctest

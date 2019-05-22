@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright © 2012-2013 Roberto Alsina and others.
+# Copyright © 2012-2019 Roberto Alsina and others.
 
 # Permission is hereby granted, free of charge, to any
 # person obtaining a copy of this software and associated
@@ -41,6 +41,7 @@ class GzipFiles(TaskMultiplier):
     is_default = True
 
     def process(self, task, prefix):
+        """Process tasks."""
         if not self.site.config['GZIP_FILES']:
             return []
         if task.get('name') is None:
@@ -70,6 +71,7 @@ class GzipFiles(TaskMultiplier):
 
 
 def create_gzipped_copy(in_path, out_path, command=None):
+    """Create gzipped copy of in_path and save it as out_path."""
     if command:
         subprocess.check_call(shlex.split(command.format(filename=in_path)))
     else:

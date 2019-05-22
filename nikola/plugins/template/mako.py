@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright © 2012-2013 Roberto Alsina and others.
+# Copyright © 2012-2019 Roberto Alsina and others.
 
 # Permission is hereby granted, free of charge, to any
 # person obtaining a copy of this software and associated
@@ -24,62 +24,87 @@
 # OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-"""Mako template handlers"""
-from __future__ import unicode_literals, print_function, absolute_import
+"""Mako template handler."""
+
+import io
 import os
 import shutil
-import sys
-import tempfile
 
-from mako import util, lexer
+from mako import exceptions, util, lexer, parsetree
 from mako.lookup import TemplateLookup
 from mako.template import Template
 from markupsafe import Markup  # It's ok, Mako requires it
 
 from nikola.plugin_categories import TemplateSystem
-from nikola.utils import makedirs, get_logger, STDERR_HANDLER
+from nikola.utils import makedirs, get_logger
 
-LOGGER = get_logger('mako', STDERR_HANDLER)
+LOGGER = get_logger('mako')
 
 
 class MakoTemplates(TemplateSystem):
-    """Wrapper for Mako templates."""
+    """Support for Mako templates."""
 
     name = "mako"
 
     lookup = None
     cache = {}
+    filters = {}
+    directories = []
+    cache_dir = None
 
-    def get_deps(self, filename):
-        text = util.read_file(filename)
-        lex = lexer.Lexer(text=text, filename=filename)
+    def get_string_deps(self, text, filename=None):
+        """Find dependencies for a template string."""
+        lex = lexer.Lexer(text=text, filename=filename, input_encoding='utf-8')
         lex.parse()
 
         deps = []
         for n in lex.template.nodes:
             keyword = getattr(n, 'keyword', None)
-            if keyword in ["inherit", "namespace"]:
+            if keyword in ["inherit", "namespace"] or isinstance(n, parsetree.IncludeTag):
                 deps.append(n.attributes['file'])
-            # TODO: include tags are not handled
+        # Some templates will include "foo.tmpl" and we need paths, so normalize them
+        # using the template lookup
+        for i, d in enumerate(deps):
+            dep = self.get_template_path(d)
+            if dep:
+                deps[i] = dep
+            else:
+                LOGGER.error("Cannot find template {0} referenced in {1}",
+                             d, filename)
         return deps
 
-    def set_directories(self, directories, cache_folder):
-        """Create a template lookup."""
-        cache_dir = os.path.join(cache_folder, '.mako.tmp')
-        # Workaround for a Mako bug, Issue #825
-        if sys.version_info[0] == 2:
-            try:
-                os.path.abspath(cache_dir).decode('ascii')
-            except UnicodeEncodeError:
-                cache_dir = tempfile.mkdtemp()
-                LOGGER.warning('Because of a Mako bug, setting cache_dir to {0}'.format(cache_dir))
+    def get_deps(self, filename):
+        """Get paths to dependencies for a template."""
+        text = util.read_file(filename)
+        return self.get_string_deps(text, filename)
 
+    def set_directories(self, directories, cache_folder):
+        """Create a new template lookup with set directories."""
+        cache_dir = os.path.join(cache_folder, '.mako.tmp')
         if os.path.exists(cache_dir):
             shutil.rmtree(cache_dir)
+        self.directories = directories
+        self.cache_dir = cache_dir
+        self.create_lookup()
+
+    def inject_directory(self, directory):
+        """Add a directory to the lookup and recreate it if it's not there yet."""
+        if directory not in self.directories:
+            self.directories.append(directory)
+            self.create_lookup()
+
+    def create_lookup(self):
+        """Create a template lookup."""
         self.lookup = TemplateLookup(
-            directories=directories,
-            module_directory=cache_dir,
+            directories=self.directories,
+            module_directory=self.cache_dir,
+            input_encoding='utf-8',
             output_encoding='utf-8')
+
+    def set_site(self, site):
+        """Set the Nikola site."""
+        self.site = site
+        self.filters.update(self.site.config['TEMPLATE_FILTERS'])
 
     def render_template(self, template_name, output_name, context):
         """Render the template into output_name using context."""
@@ -88,17 +113,17 @@ class MakoTemplates(TemplateSystem):
         data = template.render_unicode(**context)
         if output_name is not None:
             makedirs(os.path.dirname(output_name))
-            with open(output_name, 'w+') as output:
+            with io.open(output_name, 'w', encoding='utf-8') as output:
                 output.write(data)
         return data
 
     def render_template_to_string(self, template, context):
-        """ Render template to a string using context. """
-
-        return Template(template).render(**context)
+        """Render template to a string using context."""
+        context.update(self.filters)
+        return Template(template, lookup=self.lookup).render(**context)
 
     def template_deps(self, template_name):
-        """Returns filenames which are dependencies for a template."""
+        """Generate list of dependencies for a template."""
         # We can cache here because dependencies should
         # not change between runs
         if self.cache.get(template_name, None) is None:
@@ -106,10 +131,19 @@ class MakoTemplates(TemplateSystem):
             dep_filenames = self.get_deps(template.filename)
             deps = [template.filename]
             for fname in dep_filenames:
-                deps += self.template_deps(fname)
-            self.cache[template_name] = tuple(deps)
+                deps += [fname] + self.get_deps(fname)
+            self.cache[template_name] = deps
         return list(self.cache[template_name])
+
+    def get_template_path(self, template_name):
+        """Get the path to a template or return None."""
+        try:
+            t = self.lookup.get_template(template_name)
+            return t.filename
+        except exceptions.TopLevelLookupException:
+            return None
 
 
 def striphtml(text):
+    """Strip HTML tags from text."""
     return Markup(text).striptags()

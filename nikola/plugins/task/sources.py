@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright © 2012-2013 Roberto Alsina and others.
+# Copyright © 2012-2019 Roberto Alsina and others.
 
 # Permission is hereby granted, free of charge, to any
 # person obtaining a copy of this software and associated
@@ -24,6 +24,8 @@
 # OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+"""Copy page sources into the output."""
+
 import os
 
 from nikola.plugin_categories import Task
@@ -36,19 +38,12 @@ class Sources(Task):
     name = "render_sources"
 
     def gen_tasks(self):
-        """Publish the page sources into the output.
-
-        Required keyword arguments:
-
-        translations
-        default_lang
-        post_pages
-        output_folder
-        """
+        """Publish the page sources into the output."""
         kw = {
             "translations": self.site.config["TRANSLATIONS"],
             "output_folder": self.site.config["OUTPUT_FOLDER"],
             "default_lang": self.site.config["DEFAULT_LANG"],
+            "show_untranslated_posts": self.site.config['SHOW_UNTRANSLATED_POSTS'],
         }
 
         self.site.scan_posts()
@@ -56,20 +51,18 @@ class Sources(Task):
         if self.site.config['COPY_SOURCES']:
             for lang in kw["translations"]:
                 for post in self.site.timeline:
+                    if not kw["show_untranslated_posts"] and lang not in post.translated_to:
+                        continue
                     if post.meta('password'):
                         continue
                     output_name = os.path.join(
                         kw['output_folder'], post.destination_path(
-                            lang, post.source_ext()))
-                    source = post.source_path
-                    dest_ext = self.site.get_compiler(post.source_path).extension()
-                    if dest_ext == post.source_ext():
+                            lang, post.source_ext(True)))
+                    # do not publish PHP sources
+                    if post.source_ext(True) == post.compiler.extension():
                         continue
-                    if lang != kw["default_lang"]:
-                        source_lang = source + '.' + lang
-                        if os.path.exists(source_lang):
-                            source = source_lang
-                    if os.path.isfile(source):
+                    source = post.translated_source_path(lang)
+                    if source is not None and os.path.isfile(source):
                         yield {
                             'basename': 'render_sources',
                             'name': os.path.normpath(output_name),
@@ -77,5 +70,5 @@ class Sources(Task):
                             'targets': [output_name],
                             'actions': [(utils.copy_file, (source, output_name))],
                             'clean': True,
-                            'uptodate': [utils.config_changed(kw)],
+                            'uptodate': [utils.config_changed(kw, 'nikola.plugins.task.sources')],
                         }

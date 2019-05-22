@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright © 2012-2013 Roberto Alsina and others.
+# Copyright © 2012-2019 Roberto Alsina and others.
 
 # Permission is hereby granted, free of charge, to any
 # person obtaining a copy of this software and associated
@@ -24,7 +24,9 @@
 # OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-import codecs
+"""Generate redirections."""
+
+
 import os
 
 from nikola.plugin_categories import Task
@@ -32,35 +34,27 @@ from nikola import utils
 
 
 class Redirect(Task):
-    """Generate redirections"""
+    """Generate redirections."""
 
     name = "redirect"
 
     def gen_tasks(self):
         """Generate redirections tasks."""
-
         kw = {
             'redirections': self.site.config['REDIRECTIONS'],
             'output_folder': self.site.config['OUTPUT_FOLDER'],
+            'filters': self.site.config['FILTERS'],
         }
 
         yield self.group_task()
         if kw['redirections']:
             for src, dst in kw["redirections"]:
-                src_path = os.path.join(kw["output_folder"], src)
-                yield {
+                src_path = os.path.join(kw["output_folder"], src.lstrip('/'))
+                yield utils.apply_filters({
                     'basename': self.name,
                     'name': src_path,
                     'targets': [src_path],
-                    'actions': [(create_redirect, (src_path, dst))],
+                    'actions': [(utils.create_redirect, (src_path, dst))],
                     'clean': True,
-                    'uptodate': [utils.config_changed(kw)],
-                }
-
-
-def create_redirect(src, dst):
-    utils.makedirs(os.path.dirname(src))
-    with codecs.open(src, "wb+", "utf8") as fd:
-        fd.write('<!DOCTYPE html><head><title>Redirecting...</title>'
-                 '<meta http-equiv="refresh" content="0; '
-                 'url={0}"></head>'.format(dst))
+                    'uptodate': [utils.config_changed(kw, 'nikola.plugins.task.redirect')],
+                }, kw["filters"])

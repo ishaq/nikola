@@ -1,16 +1,25 @@
 ## -*- coding: utf-8 -*-
-<%inherit file="post.tmpl"/>
 <%namespace name="helper" file="post_helper.tmpl"/>
+<%namespace name="pheader" file="post_header.tmpl"/>
 <%namespace name="comments" file="comments_helper.tmpl"/>
-<%block name="extra_head">
-${helper.twitter_card_information(post)}
-</%block>
+<%namespace name="math" file="math_helper.tmpl"/>
+<%inherit file="post.tmpl"/>
+
 <%block name="content">
-%if title and not post.meta('hidetitle'):
-    <h1>${title}</h1>
-%endif
+<article class="post-${post.meta('type')} storypage" itemscope="itemscope" itemtype="http://schema.org/Article">
+    <header>
+        ${pheader.html_title()}
+        ${pheader.html_translations(post)}
+    </header>
+    <div class="e-content entry-content" itemprop="articleBody text">
     ${post.text()}
-%if enable_comments and not post.meta('nocomments'):
-    ${comments.comment_form(post.permalink(absolute=True), post.title(), post.base_path)}
-%endif
+    </div>
+    %if site_has_comments and enable_comments and not post.meta('nocomments'):
+        <section class="comments">
+        <h2>${messages("Comments")}</h2>
+        ${comments.comment_form(post.permalink(absolute=True), post.title(), post.base_path)}
+        </section>
+    %endif
+    ${math.math_scripts_ifpost(post)}
+</article>
 </%block>

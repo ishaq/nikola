@@ -1,23 +1,25 @@
 ## -*- coding: utf-8 -*-
+<%namespace name="math" file="math_helper.tmpl"/>
 <%def name="html_pager()">
-<div>
-<ul class="pager">
-  %if prevlink:
-    <li class="previous">
-        <a href="${prevlink}" rel="prev">&larr; ${messages("Newer posts")}</a>
-    </li>
-  %endif
-  %if nextlink:
-    <li class="next">
-        <a href="${nextlink}" rel="next">${messages("Older posts")} &rarr;</a>
-    </li>
-  %endif
-</ul>
-</div>
+    %if prevlink or nextlink:
+        <nav class="postindexpager">
+        <ul class="pager">
+        %if prevlink:
+            <li class="previous">
+                <a href="${prevlink}" rel="prev">${messages("Newer posts")}</a>
+            </li>
+        %endif
+        %if nextlink:
+            <li class="next">
+                <a href="${nextlink}" rel="next">${messages("Older posts")}</a>
+            </li>
+        %endif
+        </ul>
+        </nav>
+    %endif
 </%def>
 
+### This function is deprecated; use math_helper directly.
 <%def name="mathjax_script(posts)">
-    %if any(post.is_mathjax for post in posts):
-        <script src="/assets/js/mathjax.js" type="text/javascript"></script>
-    %endif
+    ${math.math_scripts_ifposts(posts)}
 </%def>

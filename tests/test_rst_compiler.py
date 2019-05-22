@@ -4,7 +4,7 @@
 
 
 """ Test cases for Nikola ReST extensions.
-A base class ReSTExtensionTestCase provides the tests basic behaivor.
+A base class ReSTExtensionTestCase provides the tests basic behaviour.
 Subclasses must override the "sample" class attribute with the ReST markup.
 The sample will be rendered as HTML using publish_parts() by setUp().
 One method is provided for checking the resulting HTML:
@@ -24,17 +24,9 @@ always unquoted.
 
 """
 
-
-from __future__ import unicode_literals, absolute_import
-
-# This code is so you can run the samples without installing the package,
-# and should be before any import touching nikola, in any file under tests/
 import os
-import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-
-import codecs
+import io
 try:
     from io import StringIO
 except ImportError:
@@ -43,84 +35,14 @@ import tempfile
 
 import docutils
 from lxml import html
-from nose.plugins.skip import SkipTest
 import unittest
-from yapsy.PluginManager import PluginManager
 
-from nikola import utils
 import nikola.plugins.compile.rest
-from nikola.plugins.compile.rest import gist
 from nikola.plugins.compile.rest import vimeo
 import nikola.plugins.compile.rest.listing
 from nikola.plugins.compile.rest.doc import Plugin as DocPlugin
-from nikola.utils import _reload, STDERR_HANDLER
-from nikola.plugin_categories import (
-    Command,
-    Task,
-    LateTask,
-    TemplateSystem,
-    PageCompiler,
-    TaskMultiplier,
-    RestExtension,
-)
-from .base import BaseTestCase
-
-
-class FakePost(object):
-
-    def __init__(self, title, slug):
-        self._title = title
-        self._slug = slug
-        self._meta = {'slug': slug}
-
-    def title(self):
-        return self._title
-
-    def meta(self, key):
-        return self._meta[key]
-
-    def permalink(self):
-        return '/posts/' + self._slug
-
-
-class FakeSite(object):
-    def __init__(self):
-        self.template_system = self
-        self.config = {
-            'DISABLED_PLUGINS': [],
-            'EXTRA_PLUGINS': [],
-            'DEFAULT_LANG': 'en',
-        }
-        self.EXTRA_PLUGINS = self.config['EXTRA_PLUGINS']
-        self.plugin_manager = PluginManager(categories_filter={
-            "Command": Command,
-            "Task": Task,
-            "LateTask": LateTask,
-            "TemplateSystem": TemplateSystem,
-            "PageCompiler": PageCompiler,
-            "TaskMultiplier": TaskMultiplier,
-            "RestExtension": RestExtension,
-        })
-        self.loghandlers = [STDERR_HANDLER]
-        self.plugin_manager.setPluginInfoExtension('plugin')
-        if sys.version_info[0] == 3:
-            places = [
-                os.path.join(os.path.dirname(utils.__file__), 'plugins'),
-            ]
-        else:
-            places = [
-                os.path.join(os.path.dirname(utils.__file__), utils.sys_encode('plugins')),
-            ]
-        self.plugin_manager.setPluginPlaces(places)
-        self.plugin_manager.collectPlugins()
-
-        self.timeline = [
-            FakePost(title='Fake post',
-                     slug='fake-post')
-        ]
-
-    def render_template(self, name, _, context):
-        return('<img src="IMG.jpg">')
+from nikola.utils import _reload
+from .base import BaseTestCase, FakeSite, FakePost
 
 
 class ReSTExtensionTestCase(BaseTestCase):
@@ -143,20 +65,20 @@ class ReSTExtensionTestCase(BaseTestCase):
         tmpdir = tempfile.mkdtemp()
         inf = os.path.join(tmpdir, 'inf')
         outf = os.path.join(tmpdir, 'outf')
-        depf = os.path.join(tmpdir, 'outf.dep')
-        with codecs.open(inf, 'wb+', 'utf8') as f:
+        with io.open(inf, 'w+', encoding='utf8') as f:
             f.write(rst)
-        self.html = self.compiler.compile_html(inf, outf)
-        with codecs.open(outf, 'r', 'utf8') as f:
+        p = FakePost('', '')
+        p._depfile[outf] = []
+        self.compiler.site.post_per_input_file[inf] = p
+        self.html = self.compiler.compile(inf, outf)
+        with io.open(outf, 'r', encoding='utf8') as f:
             self.html = f.read()
         os.unlink(inf)
         os.unlink(outf)
-        if os.path.isfile(depf):
-            with codecs.open(depf, 'r', 'utf8') as f:
-                self.assertEqual(self.deps, f.read())
-            os.unlink(depf)
-        else:
-            self.assertEqual(self.deps, None)
+        depfile = [p for p in p._depfile[outf] if p != outf]
+        depfile = '\n'.join(depfile)
+        if depfile:
+            self.assertEqual(self.deps.strip(), depfile)
         os.rmdir(tmpdir)
         self.html_doc = html.parse(StringIO(self.html))
 
@@ -191,73 +113,13 @@ class ReSTExtensionTestCaseTestCase(ReSTExtensionTestCase):
 
 
 class MathTestCase(ReSTExtensionTestCase):
-    sample = ':math:`e^{ix} = \cos x + i\sin x`'
+    sample = r':math:`e^{ix} = \cos x + i\sin x`'
 
-    def test_mathjax(self):
-        """ Test that math is outputting MathJax."""
+    def test_math(self):
+        """ Test that math is outputting TeX code."""
         self.basic_test()
         self.assertHTMLContains("span", attributes={"class": "math"},
-                                text="\(e^{ix} = \cos x + i\sin x\)")
-
-
-class GistTestCase(ReSTExtensionTestCase):
-    """ Test GitHubGist.
-    We will replace get_raw_gist() and get_raw_gist_with_filename()
-    monkeypatching the GitHubGist class for avoiding network dependency
-
-    """
-    gist_type = gist.GitHubGist
-    sample = '.. gist:: fake_id\n   :file: spam.py'
-    sample_without_filename = '.. gist:: fake_id2'
-
-    def setUp(self):
-        """ Patch GitHubGist for avoiding network dependency """
-        super(GistTestCase, self).setUp()
-        self.gist_type.get_raw_gist_with_filename = lambda *_: 'raw_gist_file'
-        self.gist_type.get_raw_gist = lambda *_: "raw_gist"
-        _reload(nikola.plugins.compile.rest)
-
-    def test_gist(self):
-        """ Test the gist directive with filename """
-        raise SkipTest
-        self.setHtmlFromRst(self.sample)
-        output = 'https://gist.github.com/fake_id.js?file=spam.py'
-        self.assertHTMLContains("script", attributes={"src": output})
-        self.assertHTMLContains("pre", text="raw_gist_file")
-
-    def test_gist_without_filename(self):
-        """ Test the gist directive without filename """
-        raise SkipTest
-        self.setHtmlFromRst(self.sample_without_filename)
-        output = 'https://gist.github.com/fake_id2.js'
-        self.assertHTMLContains("script", attributes={"src": output})
-        self.assertHTMLContains("pre", text="raw_gist")
-
-
-class GistIntegrationTestCase(ReSTExtensionTestCase):
-    """ Test requests integration. The gist plugin uses requests to fetch gist
-    contents and place it in a noscript tag.
-
-    """
-    sample = '.. gist:: 1812835'
-
-    def test_gist_integration(self):
-        """ Fetch contents of the gist from GH and render in a noscript tag """
-        self.basic_test()
-        text = ('Be alone, that is the secret of invention: be alone, that is'
-                ' when ideas are born. -- Nikola Tesla')
-        self.assertHTMLContains('pre', text=text)
-
-
-class SlidesTestCase(ReSTExtensionTestCase):
-    """ Slides test case """
-
-    sample = '.. slides:: IMG.jpg\n'
-
-    def test_slides(self):
-        """ Test the slides js generation and img tag creation """
-        self.basic_test()
-        self.assertHTMLContains("img", attributes={"src": "IMG.jpg"})
+                                text=r"\(e^{ix} = \cos x + i\sin x\)")
 
 
 class SoundCloudTestCase(ReSTExtensionTestCase):
@@ -294,7 +156,7 @@ class VimeoTestCase(ReSTExtensionTestCase):
         """ Test Vimeo iframe tag generation """
         self.basic_test()
         self.assertHTMLContains("iframe",
-                                attributes={"src": ("http://player.vimeo.com/"
+                                attributes={"src": ("https://player.vimeo.com/"
                                                     "video/VID"),
                                             "height": "400", "width": "600"})
 
@@ -308,10 +170,12 @@ class YoutubeTestCase(ReSTExtensionTestCase):
         """ Test Youtube iframe tag generation """
         self.basic_test()
         self.assertHTMLContains("iframe",
-                                attributes={"src": ("http://www.youtube.com/"
-                                                    "embed/YID?rel=0&hd=1&"
+                                attributes={"src": ("https://www.youtube-nocookie.com/"
+                                                    "embed/YID?rel=0&"
                                                     "wmode=transparent"),
-                                            "height": "400", "width": "600"})
+                                            "height": "400", "width": "600",
+                                            "frameborder": "0", "allowfullscreen": "",
+                                            "allow": "encrypted-media"})
 
 
 class ListingTestCase(ReSTExtensionTestCase):
@@ -322,11 +186,11 @@ class ListingTestCase(ReSTExtensionTestCase):
     sample2 = '.. code-block:: python\n\n   import antigravity'
     sample3 = '.. sourcecode:: python\n\n   import antigravity'
 
-    #def test_listing(self):
-        ##""" Test that we can render a file object contents without errors """
-        ##with cd(os.path.dirname(__file__)):
-            #self.deps = 'listings/nikola.py'
-            #self.setHtmlFromRst(self.sample1)
+    # def test_listing(self):
+    #     """ Test that we can render a file object contents without errors """
+    #     with cd(os.path.dirname(__file__)):
+    #        self.deps = 'listings/nikola.py'
+    #        self.setHtmlFromRst(self.sample1)
 
     def test_codeblock_alias(self):
         """ Test CodeBlock aliases """

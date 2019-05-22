@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright © 2012-2013 Roberto Alsina and others.
+# Copyright © 2012-2019 Roberto Alsina and others.
 
 # Permission is hereby granted, free of charge, to any
 # person obtaining a copy of this software and associated
@@ -24,21 +24,45 @@
 # OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-from __future__ import print_function
+"""Print Nikola version."""
+
+
+import requests
 
 from nikola.plugin_categories import Command
 from nikola import __version__
 
+URL = 'https://pypi.org/pypi/Nikola/json'
+
 
 class CommandVersion(Command):
-    """Print the version."""
+    """Print Nikola version."""
 
     name = "version"
 
-    doc_usage = ""
+    doc_usage = "[--check]"
     needs_config = False
     doc_purpose = "print the Nikola version number"
+    cmd_options = [
+        {
+            'name': 'check',
+            'long': 'check',
+            'short': '',
+            'default': False,
+            'type': bool,
+            'help': "Check for new versions.",
+        }
+    ]
 
     def _execute(self, options={}, args=None):
         """Print the version number."""
-        print("Nikola version " + __version__)
+        print("Nikola v" + __version__)
+        if options.get('check'):
+            data = requests.get(URL).json()
+            pypi_version = data['info']['version']
+            if pypi_version == __version__:
+                print("Nikola is up-to-date")
+            else:
+                print("The latest version of Nikola is v{0}. Please upgrade "
+                      "using `pip install --upgrade Nikola=={0}` or your "
+                      "system package manager.".format(pypi_version))

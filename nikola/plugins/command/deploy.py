@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright © 2012-2013 Roberto Alsina and others.
+# Copyright © 2012-2019 Roberto Alsina and others.
 
 # Permission is hereby granted, free of charge, to any
 # person obtaining a copy of this software and associated
@@ -24,89 +24,111 @@
 # OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-from __future__ import print_function
-from ast import literal_eval
-import codecs
+"""Deploy site."""
+
+import io
 from datetime import datetime
+from dateutil.tz import gettz
+import dateutil
 import os
-import sys
 import subprocess
 import time
-import pytz
 
 from blinker import signal
 
 from nikola.plugin_categories import Command
-from nikola.utils import remove_file, get_logger
+from nikola.utils import clean_before_deployment
 
 
-class Deploy(Command):
-    """Deploy site.  """
+class CommandDeploy(Command):
+    """Deploy site."""
+
     name = "deploy"
 
-    doc_usage = ""
+    doc_usage = "[preset [preset...]]"
     doc_purpose = "deploy the site"
-
-    logger = None
+    doc_description = "Deploy the site by executing deploy commands from the presets listed on the command line.  If no presets are specified, `default` is executed."
 
     def _execute(self, command, args):
-        self.logger = get_logger('deploy', self.site.loghandlers)
+        """Execute the deploy command."""
         # Get last successful deploy date
         timestamp_path = os.path.join(self.site.config['CACHE_FOLDER'], 'lastdeploy')
-        if self.site.config['COMMENT_SYSTEM_ID'] == 'nikolademo':
+
+        # Get last-deploy from persistent state
+        last_deploy = self.site.state.get('last_deploy')
+        if last_deploy is None:
+            # If there is a last-deploy saved, move it to the new state persistence thing
+            # FIXME: remove in Nikola 8
+            if os.path.isfile(timestamp_path):
+                try:
+                    with io.open(timestamp_path, 'r', encoding='utf8') as inf:
+                        last_deploy = dateutil.parser.parse(inf.read())
+                        clean = False
+                except (IOError, Exception) as e:
+                    self.logger.debug("Problem when reading `{0}`: {1}".format(timestamp_path, e))
+                    last_deploy = datetime(1970, 1, 1)
+                    clean = True
+                os.unlink(timestamp_path)  # Remove because from now on it's in state
+            else:  # Just a default
+                last_deploy = datetime(1970, 1, 1)
+                clean = True
+        else:
+            last_deploy = dateutil.parser.parse(last_deploy)
+            clean = False
+
+        if self.site.config['COMMENT_SYSTEM'] and self.site.config['COMMENT_SYSTEM_ID'] == 'nikolademo':
             self.logger.warn("\nWARNING WARNING WARNING WARNING\n"
                              "You are deploying using the nikolademo Disqus account.\n"
                              "That means you will not be able to moderate the comments in your own site.\n"
                              "And is probably not what you want to do.\n"
-                             "Think about it for 5 seconds, I'll wait :-)\n\n")
+                             "Think about it for 5 seconds, I'll wait :-)\n"
+                             "(press Ctrl+C to abort)\n")
             time.sleep(5)
 
-        deploy_drafts = self.site.config.get('DEPLOY_DRAFTS', True)
-        deploy_future = self.site.config.get('DEPLOY_FUTURE', False)
-        if not (deploy_drafts and deploy_future):
-            # Remove drafts and future posts
-            out_dir = self.site.config['OUTPUT_FOLDER']
-            undeployed_posts = []
-            self.site.scan_posts()
-            for post in self.site.timeline:
-                if (not deploy_drafts and post.is_draft) or \
-                   (not deploy_future and post.publish_later):
-                    remove_file(os.path.join(out_dir, post.destination_path()))
-                    remove_file(os.path.join(out_dir, post.source_path))
-                    undeployed_posts.append(post)
+        # Remove drafts and future posts if requested
+        undeployed_posts = clean_before_deployment(self.site)
+        if undeployed_posts:
+            self.logger.notice("Deleted {0} posts due to DEPLOY_* settings".format(len(undeployed_posts)))
 
-        for command in self.site.config['DEPLOY_COMMANDS']:
-            self.logger.notice("==> {0}".format(command))
+        if args:
+            presets = args
+        else:
+            presets = ['default']
+
+        # test for preset existence
+        for preset in presets:
             try:
-                subprocess.check_call(command, shell=True)
-            except subprocess.CalledProcessError as e:
-                self.logger.error('Failed deployment — command {0} '
-                                  'returned {1}'.format(e.cmd, e.returncode))
-                sys.exit(e.returncode)
+                self.site.config['DEPLOY_COMMANDS'][preset]
+            except KeyError:
+                self.logger.error('No such preset: {0}'.format(preset))
+                return 255
 
-        self.logger.notice("Successful deployment")
-        tzinfo = pytz.timezone(self.site.config['TIMEZONE'])
-        try:
-            with open(timestamp_path, 'rb') as inf:
-                last_deploy = literal_eval(inf.read().strip())
-                if tzinfo:
-                    last_deploy = last_deploy.replace(tzinfo=tzinfo)
-                clean = False
-        except Exception:
-            last_deploy = datetime(1970, 1, 1)
-            if tzinfo:
-                last_deploy = last_deploy.replace(tzinfo=tzinfo)
-            clean = True
+        for preset in presets:
+            self.logger.info("=> preset '{0}'".format(preset))
+            for command in self.site.config['DEPLOY_COMMANDS'][preset]:
+                self.logger.info("==> {0}".format(command))
+                try:
+                    subprocess.check_call(command, shell=True)
+                except subprocess.CalledProcessError as e:
+                    self.logger.error('Failed deployment -- command {0} '
+                                      'returned {1}'.format(e.cmd, e.returncode))
+                    return e.returncode
 
-        new_deploy = datetime.now()
+        self.logger.info("Successful deployment")
+
+        new_deploy = datetime.utcnow()
         self._emit_deploy_event(last_deploy, new_deploy, clean, undeployed_posts)
 
         # Store timestamp of successful deployment
-        with codecs.open(timestamp_path, 'wb+', 'utf8') as outf:
-            outf.write(repr(new_deploy))
+        self.site.state.set('last_deploy', new_deploy.isoformat())
+        if clean:
+            self.logger.info(
+                'Looks like this is the first time you deployed this site. '
+                'Let us know you are using Nikola '
+                'at <https://users.getnikola.com/add/> if you want!')
 
     def _emit_deploy_event(self, last_deploy, new_deploy, clean=False, undeployed=None):
-        """ Emit events for all timeline entries newer than last deploy.
+        """Emit events for all timeline entries newer than last deploy.
 
         last_deploy: datetime
             Time stamp of the last successful deployment.
@@ -118,16 +140,15 @@ class Deploy(Command):
             True when it appears like deploy is being run after a clean.
 
         """
-
-        if undeployed is None:
-            undeployed = []
-
         event = {
             'last_deploy': last_deploy,
             'new_deploy': new_deploy,
             'clean': clean,
             'undeployed': undeployed
         }
+
+        if last_deploy.tzinfo is None:
+            last_deploy = last_deploy.replace(tzinfo=gettz('UTC'))
 
         deployed = [
             entry for entry in self.site.timeline

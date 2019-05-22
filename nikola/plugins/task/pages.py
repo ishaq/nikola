@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright © 2012-2013 Roberto Alsina and others.
+# Copyright © 2012-2019 Roberto Alsina and others.
 
 # Permission is hereby granted, free of charge, to any
 # person obtaining a copy of this software and associated
@@ -24,9 +24,12 @@
 # OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-from __future__ import unicode_literals
+"""Render pages into output."""
+
+import os
+
 from nikola.plugin_categories import Task
-from nikola.utils import config_changed
+from nikola.utils import config_changed, LOGGER
 
 
 class RenderPages(Task):
@@ -40,19 +43,34 @@ class RenderPages(Task):
             "post_pages": self.site.config["post_pages"],
             "translations": self.site.config["TRANSLATIONS"],
             "filters": self.site.config["FILTERS"],
-            "hide_untranslated_posts": self.site.config['HIDE_UNTRANSLATED_POSTS'],
+            "show_untranslated_posts": self.site.config['SHOW_UNTRANSLATED_POSTS'],
+            "demote_headers": self.site.config['DEMOTE_HEADERS'],
         }
         self.site.scan_posts()
         yield self.group_task()
+        index_paths = {}
+        for lang in kw["translations"]:
+            index_paths[lang] = False
+            if not self.site.config["DISABLE_INDEXES"]:
+                index_paths[lang] = os.path.normpath(os.path.join(self.site.config['OUTPUT_FOLDER'],
+                                                     self.site.path('index', '', lang=lang)))
+
         for lang in kw["translations"]:
             for post in self.site.timeline:
-                if kw["hide_untranslated_posts"] and not post.is_translation_available(lang):
+                if not kw["show_untranslated_posts"] and not post.is_translation_available(lang):
                     continue
-                for task in self.site.generic_page_renderer(lang, post,
-                                                            kw["filters"]):
-                    task['uptodate'] = [config_changed({
-                        1: task['uptodate'][0].config,
-                        2: kw})]
+                if post.is_post:
+                    context = {'pagekind': ['post_page']}
+                else:
+                    context = {'pagekind': ['story_page', 'page_page']}
+                for task in self.site.generic_page_renderer(lang, post, kw["filters"], context):
+                    if task['name'] == index_paths[lang]:
+                        # Issue 3022
+                        LOGGER.error(
+                            "Post {0!r}: output path ({1}) conflicts with the blog index ({2}). "
+                            "Please change INDEX_PATH or disable index generation.".format(
+                                post.source_path, task['name'], index_paths[lang]))
+                    task['uptodate'] = task['uptodate'] + [config_changed(kw, 'nikola.plugins.task.pages')]
                     task['basename'] = self.name
                     task['task_dep'] = ['render_posts']
                     yield task

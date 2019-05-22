@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright © 2012-2013 Roberto Alsina and others.
+# Copyright © 2012-2019 Roberto Alsina and others.
 
 # Permission is hereby granted, free of charge, to any
 # person obtaining a copy of this software and associated
@@ -24,31 +24,63 @@
 # OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-"""Markdown Extension for Nikola-specific post-processing"""
-from __future__ import unicode_literals
+"""Markdown Extension for Nikola.
+
+- Specific post-processing.
+- Strikethrough inline patterns.
+"""
+
 import re
-from markdown.postprocessors import Postprocessor
-from markdown.extensions import Extension
+try:
+    from markdown.postprocessors import Postprocessor
+    from markdown.inlinepatterns import SimpleTagPattern
+    from markdown.extensions import Extension
+except ImportError:
+    # No need to catch this, if you try to use this without Markdown,
+    # the markdown compiler will fail first
+    Postprocessor = SimpleTagPattern = Extension = object
+
+from nikola.plugin_categories import MarkdownExtension
+
+
+CODERE = re.compile('<div class="codehilite"><pre>(.*?)</pre></div>', flags=re.MULTILINE | re.DOTALL)
+STRIKE_RE = r"(~{2})(.+?)(~{2})"  # ~~strike~~
 
 
 class NikolaPostProcessor(Postprocessor):
+    """Nikola-specific post-processing for Markdown."""
+
     def run(self, text):
+        """Run the postprocessor."""
         output = text
 
-        # python-markdown's highlighter uses the class 'codehilite' to wrap
-        # code, instead of the standard 'code'. None of the standard
-        # pygments stylesheets use this class, so swap it to be 'code'
-        output = re.sub(r'(<div[^>]+class="[^"]*)codehilite([^>]+)',
-                        r'\1code\2', output)
+        # python-markdown's highlighter uses <div class="codehilite"><pre>
+        # for code.  We switch it to reST's <pre class="code">.
+        # TODO: monkey-patch for CodeHilite that uses nikola.utils.NikolaPygmentsHTML
+        output = CODERE.sub('<pre class="code literal-block">\\1</pre>', output)
         return output
 
 
-class NikolaExtension(Extension):
-    def extendMarkdown(self, md, md_globals):
+class NikolaExtension(MarkdownExtension, Extension):
+    """Nikola Markdown extensions."""
+
+    def _add_nikola_post_processor(self, md):
+        """Extend Markdown with the postprocessor."""
         pp = NikolaPostProcessor()
         md.postprocessors.add('nikola_post_processor', pp, '_end')
+
+    def _add_strikethrough_inline_pattern(self, md):
+        """Support PHP-Markdown style strikethrough, for example: ``~~strike~~``."""
+        pattern = SimpleTagPattern(STRIKE_RE, 'del')
+        md.inlinePatterns.add('strikethrough', pattern, '_end')
+
+    def extendMarkdown(self, md, md_globals):
+        """Extend markdown to Nikola flavours."""
+        self._add_nikola_post_processor(md)
+        self._add_strikethrough_inline_pattern(md)
         md.registerExtension(self)
 
 
-def makeExtension(configs=None):
+def makeExtension(configs=None):  # pragma: no cover
+    """Make extension."""
     return NikolaExtension(configs)

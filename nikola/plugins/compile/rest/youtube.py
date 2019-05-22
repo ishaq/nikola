@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright © 2012-2013 Roberto Alsina and others.
+# Copyright © 2012-2019 Roberto Alsina and others.
 
 # Permission is hereby granted, free of charge, to any
 # person obtaining a copy of this software and associated
@@ -24,32 +24,38 @@
 # OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+"""YouTube directive for reStructuredText."""
+
 from docutils import nodes
 from docutils.parsers.rst import Directive, directives
-
+from nikola.plugins.compile.rest import _align_choice, _align_options_base
 
 from nikola.plugin_categories import RestExtension
 
 
 class Plugin(RestExtension):
+    """Plugin for the youtube directive."""
 
     name = "rest_youtube"
 
     def set_site(self, site):
+        """Set Nikola site."""
         self.site = site
         directives.register_directive('youtube', Youtube)
         return super(Plugin, self).set_site(site)
 
 
 CODE = """\
-<iframe width="{width}"
-height="{height}"
-src="http://www.youtube.com/embed/{yid}?rel=0&amp;hd=1&amp;wmode=transparent"
-></iframe>"""
+<div class="youtube-video{align}">
+<iframe width="{width}" height="{height}"
+src="https://www.youtube-nocookie.com/embed/{yid}?rel=0&wmode=transparent"
+frameborder="0" allow="encrypted-media" allowfullscreen
+></iframe>
+</div>"""
 
 
 class Youtube(Directive):
-    """ Restructured text extension for inserting youtube embedded videos
+    """reST extension for inserting youtube embedded videos.
 
     Usage:
         .. youtube:: lyViVmaBQDg
@@ -57,25 +63,33 @@ class Youtube(Directive):
            :width: 600
 
     """
+
     has_content = True
     required_arguments = 1
     option_spec = {
-        "width": directives.positive_int,
-        "height": directives.positive_int,
+        "width": directives.unchanged,
+        "height": directives.unchanged,
+        "align": _align_choice
     }
 
     def run(self):
+        """Run the youtube directive."""
         self.check_content()
         options = {
             'yid': self.arguments[0],
-            'width': 425,
-            'height': 344,
+            'width': 560,
+            'height': 315,
         }
-        options.update(self.options)
+        options.update({k: v for k, v in self.options.items() if v})
+        if self.options.get('align') in _align_options_base:
+            options['align'] = ' align-' + self.options['align']
+        else:
+            options['align'] = ''
         return [nodes.raw('', CODE.format(**options), format='html')]
 
     def check_content(self):
-        if self.content:
+        """Check if content exists."""
+        if self.content:  # pragma: no cover
             raise self.warning("This directive does not accept content. The "
                                "'key=value' format for options is deprecated, "
                                "use ':key: value' instead")
